@@ -6,7 +6,7 @@ module.exports = (io, socket) => {
   console.log('⚡ New connection:', socket.id);
   voters[socket.id] = new Set();
 
-  // ✅ Students join waiting room to listen for polls
+  // ✅ Students join waiting room
   socket.on('join-waiting-room', () => {
     socket.join('waiting-room');
     console.log(`👨‍🎓 Student ${socket.id} joined waiting-room`);
@@ -17,6 +17,16 @@ module.exports = (io, socket) => {
     const id = pollId || uuidv4();
     console.log(`📝 Creating poll: ${id}`);
 
+    // 🔥 End previous active poll by this teacher if exists
+    for (const prevId in activePolls) {
+      const prevPoll = activePolls[prevId];
+      if (prevPoll.createdBy === socket.id && prevPoll.isActive) {
+        prevPoll.isActive = false;
+        io.to(prevId).emit('poll-ended', prevPoll);
+      }
+    }
+
+    // ✅ Create new poll
     activePolls[id] = {
       pollId: id,
       question,
@@ -27,12 +37,12 @@ module.exports = (io, socket) => {
       endsAt: Date.now() + duration
     };
 
-    socket.join(id); // Teacher joins their poll room
+    socket.join(id);
 
-    // ✅ Send poll-started to all students in waiting room
+    // ✅ Emit new poll to all students
     io.to('waiting-room').emit('poll-started', activePolls[id]);
 
-    // ✅ Also join all students in waiting-room to this poll room
+    // ✅ Move students to this poll room
     const waitingRoomSockets = io.sockets.adapter.rooms.get('waiting-room');
     if (waitingRoomSockets) {
       for (const studentSocketId of waitingRoomSockets) {
@@ -43,7 +53,7 @@ module.exports = (io, socket) => {
       }
     }
 
-    // 🕒 Auto-end the poll after duration
+    // ⏲ Auto-end poll
     setTimeout(() => {
       const poll = activePolls[id];
       if (poll && poll.isActive) {
@@ -52,11 +62,10 @@ module.exports = (io, socket) => {
       }
     }, duration);
 
-    // Acknowledge to teacher
     socket.emit('poll-created', { pollId: id });
   });
 
-  // ✅ Student joins a specific poll room (optional future use)
+  // ✅ Student joins poll manually (optional feature)
   socket.on('join-poll', ({ pollId }) => {
     const poll = activePolls[pollId];
     if (poll && poll.isActive) {
@@ -67,7 +76,7 @@ module.exports = (io, socket) => {
     }
   });
 
-  // ✅ Student submits an answer
+  // ✅ Student submits vote
   socket.on('submit-answer', ({ pollId, optionIndex }) => {
     const poll = activePolls[pollId];
     if (!poll || !poll.isActive) {
@@ -90,7 +99,7 @@ module.exports = (io, socket) => {
     io.to(pollId).emit('poll-update', poll);
   });
 
-  // ✅ Teacher ends the poll early
+  // ✅ Manual early end by teacher
   socket.on('end-poll', ({ pollId }) => {
     const poll = activePolls[pollId];
     if (poll && poll.createdBy === socket.id && poll.isActive) {
@@ -99,7 +108,7 @@ module.exports = (io, socket) => {
     }
   });
 
-  // ✅ Get live results
+  // ✅ Get results
   socket.on('get-results', ({ pollId }) => {
     const poll = activePolls[pollId];
     if (poll) {
@@ -109,12 +118,11 @@ module.exports = (io, socket) => {
     }
   });
 
-  // 🔌 Handle disconnect
+  // 🔌 Disconnect logic
   socket.on('disconnect', () => {
     console.log('🔴 Disconnected:', socket.id);
     delete voters[socket.id];
 
-    // End polls created by this user if still active
     for (const pollId in activePolls) {
       const poll = activePolls[pollId];
       if (poll.createdBy === socket.id && poll.isActive) {
